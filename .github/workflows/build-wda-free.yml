@@ -38,7 +38,7 @@ jobs:
 
       - name: Clone WebDriverAgent
         run: |
-          git clone --depth 1 --branch main https://github.com/appium/WebDriverAgent.git
+          git clone --depth 1 https://github.com/appium/WebDriverAgent.git
           cd WebDriverAgent
 
       - name: Configure unique Bundle ID
