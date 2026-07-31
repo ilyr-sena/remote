@@ -1,0 +1,146 @@
+# wda-builder-free - GitHub Actions WebDriverAgent Builder (Free Apple ID)
+#
+# Works with FREE Apple ID (no paid Developer Program)
+# Uses Xcode's "Automatic Signing" with your Apple ID
+#
+# Setup:
+# 1. Create a new GitHub repository
+# 2. Push this folder to it
+# 3. Add these secrets in GitHub: Settings → Secrets and variables → Actions
+#
+# Required Secrets (FREE Apple ID):
+# - APPLE_ID: Your Apple ID email
+# - APPLE_PASSWORD: App-specific password (from appleid.apple.com)
+# - BUNDLE_ID_PREFIX: Unique prefix for bundle ID (e.g., "com.yourname")
+# - DEVICE_UDID: Your iPhone UDID (from: pymobiledevice3 usbmux list)
+#
+# NOTE: No APPLE_TEAM_ID needed for free accounts!
+
+name: Build WebDriverAgent (Free Apple ID)
+
+on:
+  workflow_dispatch:  # Manual trigger from Actions tab
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly rebuild (free cert expires in 7 days)
+
+jobs:
+  build-wda:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone WebDriverAgent
+        run: |
+          git clone --depth 1 --branch main https://github.com/appium/WebDriverAgent.git
+          cd WebDriverAgent
+
+      - name: Configure unique Bundle ID
+        run: |
+          cd WebDriverAgent
+          # Use the provided prefix or generate from Apple ID
+          PREFIX="${{ secrets.BUNDLE_ID_PREFIX }}"
+          if [ -z "$PREFIX" ]; then
+            # Generate from Apple ID: user@example.com -> com.example.user
+            PREFIX="com.$(echo "${{ secrets.APPLE_ID }}" | sed 's/@.*//' | sed 's/[^a-zA-Z0-9]//g')"
+          fi
+          NEW_BUNDLE_ID="${PREFIX}.wda.WebDriverAgentRunner"
+          echo "NEW_BUNDLE_ID=${NEW_BUNDLE_ID}" >> $GITHUB_ENV
+          echo "Using Bundle ID: ${NEW_BUNDLE_ID}"
+          
+          # Update the project's bundle identifier
+          # WebDriverAgentRunner target
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${NEW_BUNDLE_ID}" \
+            WebDriverAgentRunner/Info.plist
+          # WebDriverAgentLib target  
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${PREFIX}.wda.WebDriverAgentLib" \
+            WebDriverAgentLib/Info.plist
+
+      - name: Create export options for free account
+        run: |
+          cd WebDriverAgent
+          cat > ExportOptions.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>development</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>compileBitcode</key>
+              <false/>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>${{ env.NEW_BUNDLE_ID }}</key>
+                  <string>iOS Team Provisioning Profile: ${{ env.NEW_BUNDLE_ID }}</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Install WebDriverAgent dependencies
+        run: |
+          cd WebDriverAgent
+          ./Scripts/bootstrap.sh -d
+
+      - name: Build WebDriverAgentRunner (with automatic signing)
+        run: |
+          cd WebDriverAgent
+          xcodebuild \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination "id=${{ secrets.DEVICE_UDID }}" \
+            -configuration Debug \
+            -derivedDataPath ./build \
+            CODE_SIGN_STYLE=Automatic \
+            -allowProvisioningUpdates \
+            test-without-building
+
+      - name: Archive WebDriverAgentRunner
+        run: |
+          cd WebDriverAgent
+          xcodebuild \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination "id=${{ secrets.DEVICE_UDID }}" \
+            -configuration Debug \
+            -derivedDataPath ./build \
+            -archivePath ./build/WebDriverAgentRunner.xcarchive \
+            CODE_SIGN_STYLE=Automatic \
+            -allowProvisioningUpdates \
+            archive
+
+      - name: Export IPA
+        run: |
+          cd WebDriverAgent
+          xcodebuild \
+            -exportArchive \
+            -archivePath ./build/WebDriverAgentRunner.xcarchive \
+            -exportPath ./build/export \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates
+
+      - name: Upload IPA as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgentRunner
+          path: WebDriverAgent/build/export/*.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Show download instructions
+        run: |
+          echo "✅ Build complete!"
+          echo "📥 Download the IPA from the 'Artifacts' section"
+          echo "📱 Install on Linux with: pymobiledevice3 apps install WebDriverAgentRunner.ipa"
+          echo "🚀 Start WDA with: pymobiledevice3 developer dvt xcuitest ${{ env.NEW_BUNDLE_ID }}.xctrunner"
+          echo "🔗 Forward port: pymobiledevice3 forward 8100 8100"
