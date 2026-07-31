@@ -90,7 +90,9 @@ jobs:
       - name: Install WebDriverAgent dependencies
         run: |
           cd WebDriverAgent
-          ./Scripts/bootstrap.sh -d
+          # No bootstrap.sh needed in newer versions
+          # Dependencies are handled by xcodebuild
+          ls -la Scripts/
 
       - name: Build WebDriverAgentRunner (with automatic signing)
         run: |
